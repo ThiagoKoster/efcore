@@ -321,32 +321,78 @@ namespace Microsoft.Data.Sqlite
                 ? PrepareAndEnumerateStatements(timer)
                 : _preparedStatements)
             {
-                var boundParams = _parameters?.Bind(stmt) ?? 0;
-
                 var expectedParams = sqlite3_bind_parameter_count(stmt);
-                if (expectedParams != boundParams)
+                var unboundParams = new List<string>();
+                
+                for (var i = 1; i <= expectedParams; i++)
                 {
-                    var unboundParams = new List<string>();
-                    for (var i = 1; i <= expectedParams; i++)
+                    unboundParams.Add(sqlite3_bind_parameter_name(stmt, i).utf8_to_string());
+                }
+                
+               if (_parameters is not null)
+                {
+                    foreach (var parameter in _parameters.Cast<SqliteParameter>())
                     {
-                        var name = sqlite3_bind_parameter_name(stmt, i).utf8_to_string();
-
-                        if (_parameters != null
-                            && !_parameters.Cast<SqliteParameter>().Any(p => p.ParameterName == name))
+                        if (parameter.Bind(stmt))
                         {
-                            unboundParams.Add(name);
+                            unboundParams.Remove(unboundParams.SingleOrDefault(unboundParam =>
+                                unboundParam.EndsWith(parameter.ParameterName, StringComparison.Ordinal))
+                                );
                         }
                     }
-
-                    if (sqlite3_libversion_number() < 3028000 || sqlite3_stmt_isexplain(stmt) == 0)
+                }
+                
+                if (expectedParams > 0)
+                {
+                    if (unboundParams.Any())
                     {
-                        throw new InvalidOperationException(Resources.MissingParameters(string.Join(", ", unboundParams)));
+                        for (var i = 1; i <= expectedParams; i++)
+                        {
+                            var name = sqlite3_bind_parameter_name(stmt, i).utf8_to_string();
+
+                            BindParameters(stmt, unboundParams, name);
+
+                        }
+                    }
+                    if (unboundParams.Any() && (sqlite3_libversion_number() < 3028000 || sqlite3_stmt_isexplain(stmt) == 0))
+                    {
+                        throw new InvalidOperationException(Resources.MissingParameters(string.Join(", ", unboundParams.Select(p => p))));
                     }
                 }
 
                 yield return stmt;
             }
         }
+
+        private void BindParameters(sqlite3_stmt stmt, List<string> unboundParams, string name)
+        {
+           
+            var ambiguousParams = _parameters?.Cast<SqliteParameter>()
+                          .GroupBy(parameter => parameter.ParameterName, StringComparer.OrdinalIgnoreCase)
+                          .Where(g => g.Count() > 1)
+                          .Select(g => g.Key)
+                          .ToList();
+            if (ambiguousParams is not null && !ambiguousParams.Any())
+            {
+                CaseInsensitiveParameterBind(stmt, ambiguousParams, unboundParams, name);
+            }
+        }
+
+        private void CaseInsensitiveParameterBind(sqlite3_stmt stmt, List<string> ambiguousParams, List<string> unboundParams, string name)
+        {
+            var parameter = _parameters.Cast<SqliteParameter>()
+                                            .SingleOrDefault(p => !ambiguousParams.Contains(p.ParameterName, StringComparer.OrdinalIgnoreCase) &&
+                                            p.ParameterName.Equals(name, StringComparison.OrdinalIgnoreCase));
+            if (parameter is not null)
+            {
+                parameter.ParameterName = name;
+                if (parameter.Bind(stmt))
+                {
+                    unboundParams.Remove(parameter.ParameterName);
+                }
+            }
+        }
+
 
         /// <summary>
         ///     Executes the <see cref="CommandText" /> against the database and returns a data reader.

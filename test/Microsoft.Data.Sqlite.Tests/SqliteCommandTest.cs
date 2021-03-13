@@ -1018,5 +1018,61 @@ namespace Microsoft.Data.Sqlite
                 Assert.Equal(1L, result);
             }
         }
+
+        [Fact]
+        public void Parameters_should_be_case_sensitive_when_ambiguos()
+        {
+            var expectedValues = new object[] { 1L, 2L, 3L, 4L, 5L, 6L };
+            using(var connection = new SqliteConnection("Data Source=:memory:"))
+            {
+                connection.Open();
+
+                var command = connection.CreateCommand();
+                command.CommandText = "SELECT $A, $a, @A, @a, :A, :a";
+                command.Parameters.AddWithValue("$A", expectedValues[0]);
+                command.Parameters.AddWithValue("$a", expectedValues[1]);
+                command.Parameters.AddWithValue("@A", expectedValues[2]);
+                command.Parameters.AddWithValue("@a", expectedValues[3]);
+                command.Parameters.AddWithValue(":A", expectedValues[4]);
+                command.Parameters.AddWithValue(":a", expectedValues[5]);
+
+                using (var reader = command.ExecuteReader())
+                {
+                    reader.Read();
+                    var values = new object[6];
+                    reader.GetValues(values);
+
+                    Assert.Equal(values, expectedValues);
+                }
+                    
+            }
+        }
+
+        [Fact]
+        public void Parameters_should_be_case_forgiving_when_not_ambiguos()
+        {
+            var expectedValues = new object[] { 1L, 2L, 3L };
+            using (var connection = new SqliteConnection("Data Source=:memory:"))
+            {
+                connection.Open();
+
+                var command = connection.CreateCommand();
+                command.CommandText = "SELECT $a, @A, :a;";
+                command.Parameters.AddWithValue("$A", expectedValues[0]);
+                command.Parameters.AddWithValue("@a", expectedValues[1]);
+                command.Parameters.AddWithValue(":A", expectedValues[2]);
+
+                using (var reader = command.ExecuteReader())
+                {
+                    reader.Read();
+                    var values = new object[3];
+                    reader.GetValues(values);
+
+                    Assert.Equal(values, expectedValues);
+                }
+
+            }
+        }
+
     }
 }
